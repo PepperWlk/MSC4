@@ -1,0 +1,13 @@
+/NOLOGO
+/errorReport:prompt
+/MACHINE:x64
+/SUBSYSTEM:WINDOWS
+/DEF
+/NAME:"UnrealEditor-KenshiLike.dll"
+/IGNORE:4221
+/NODEFAULTLIB
+"C:/Users/lguillemart/Documents/Unreal Projects/MSC4/KenshiLike/Intermediate/Build/Win64/x64/KenshiLikeEditor/Development/UnrealEd/SharedPCH.UnrealEd.Project.ValApi.ValExpApi.Cpp20.h.obj"
+"C:/Users/lguillemart/Documents/Unreal Projects/MSC4/KenshiLike/Intermediate/Build/Win64/x64/UnrealEditor/Development/KenshiLike/KenshiLike.cpp.obj"
+"C:/Users/lguillemart/Documents/Unreal Projects/MSC4/KenshiLike/Intermediate/Build/Win64/x64/UnrealEditor/Development/KenshiLike/PerModuleInline.gen.cpp.obj"
+"C:/Users/lguillemart/Documents/Unreal Projects/MSC4/KenshiLike/Intermediate/Build/Win64/x64/UnrealEditor/Development/KenshiLike/Default.rc2.res"
+/OUT:"C:/Users/lguillemart/Documents/Unreal Projects/MSC4/KenshiLike/Intermediate/Build/Win64/x64/UnrealEditor/Development/KenshiLike/UnrealEditor-KenshiLike.lib"

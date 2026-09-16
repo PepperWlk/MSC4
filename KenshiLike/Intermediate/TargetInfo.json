@@ -1,0 +1,14 @@
+{
+	"Targets": [
+		{
+			"Name": "KenshiLike",
+			"Path": "..\\Source\\KenshiLike.Target.cs",
+			"Type": "Game"
+		},
+		{
+			"Name": "KenshiLikeEditor",
+			"Path": "..\\Source\\KenshiLikeEditor.Target.cs",
+			"Type": "Editor"
+		}
+	]
+}

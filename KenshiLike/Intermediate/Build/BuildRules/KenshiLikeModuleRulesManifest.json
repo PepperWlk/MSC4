@@ -1,0 +1,8 @@
+{
+	"SourceFiles": [
+		"C:\\Users\\lguillemart\\Documents\\Unreal Projects\\MSC4\\KenshiLike\\Source\\KenshiLike\\KenshiLike.Build.cs",
+		"C:\\Users\\lguillemart\\Documents\\Unreal Projects\\MSC4\\KenshiLike\\Source\\KenshiLike.Target.cs",
+		"C:\\Users\\lguillemart\\Documents\\Unreal Projects\\MSC4\\KenshiLike\\Source\\KenshiLikeEditor.Target.cs"
+	],
+	"EngineVersion": "5.7.4"
+}

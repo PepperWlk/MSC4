@@ -1,20 +1,34 @@
-
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "ProceduralMeshComponent.h"
-#include "Components/InstancedStaticMeshComponent.h"
 #include "MapGenerator.generated.h"
+
+UENUM(BlueprintType)
+enum class EMapQuadrant : uint8
+{
+    TopLeft     UMETA(DisplayName = "Nord-Ouest (NW)"),
+    TopRight    UMETA(DisplayName = "Nord-Est (NE)"),
+    BottomLeft  UMETA(DisplayName = "Sud-Ouest (SW)"),
+    BottomRight UMETA(DisplayName = "Sud-Est (SE)")
+};
 
 UENUM(BlueprintType)
 enum class EDesertBiome : uint8
 {
     Desert,
     Oasis,
-    Rocky,
-    Forest,
-    City
+    Rocky
+};
+
+struct FDesertOasis
+{
+    float X = 0.0f;
+    float Y = 0.0f;
+    float Radius = 0.0f;
+    float ShapeX = 0.0f;
+    float ShapeY = 0.0f;
 };
 
 UCLASS()
@@ -25,149 +39,120 @@ class KENSHILIKE_API AMapGenerator : public AActor
 public:
     AMapGenerator();
 
-    UFUNCTION(BlueprintCallable, CallInEditor, Category = "Desert")
-    void GenerateDesert();
+    UFUNCTION(BlueprintCallable, CallInEditor, Category = "Map")
+    void GenerateMap();
+
+    UFUNCTION(BlueprintCallable, Category = "Map")
+    float GetTerrainHeightAtWorld(float WorldX, float WorldY) const;
 
 protected:
-    virtual void OnConstruction(
-        const FTransform& Transform
-    ) override;
+    virtual void OnConstruction(const FTransform& Transform) override;
 
-    // --------------------------------------------------
-    // Meshes générés
-    // --------------------------------------------------
-
-    UPROPERTY(VisibleAnywhere, Category = "Desert")
+    UPROPERTY(VisibleAnywhere, Category = "Map")
     TObjectPtr<UProceduralMeshComponent> DesertMesh;
 
-    UPROPERTY(VisibleAnywhere, Category = "Desert")
+    UPROPERTY(VisibleAnywhere, Category = "Map")
     TObjectPtr<UProceduralMeshComponent> WaterMesh;
 
-    UPROPERTY(VisibleAnywhere, Category = "Desert")
-    TObjectPtr<UProceduralMeshComponent> RoadMesh;
+    UPROPERTY(EditAnywhere, Category = "Map|Generation")
+    bool bAutoGenerate = true;
 
-    UPROPERTY(VisibleAnywhere, Category = "Desert")
-    TObjectPtr<UProceduralMeshComponent> CityMesh;
+    UPROPERTY(EditAnywhere, Category = "Map|Quadrant")
+    EMapQuadrant Quadrant = EMapQuadrant::TopLeft;
 
-    // --------------------------------------------------
-    // Instances optimisées
-    // --------------------------------------------------
-
-    UPROPERTY(VisibleAnywhere, Category = "Desert|Instances")
-    TObjectPtr<UInstancedStaticMeshComponent> TreeInstances;
-
-    UPROPERTY(VisibleAnywhere, Category = "Desert|Instances")
-    TObjectPtr<UInstancedStaticMeshComponent> RockInstances;
-
-    // --------------------------------------------------
-    // Terrain : paramètres conservés
-    // --------------------------------------------------
-
-    UPROPERTY(EditAnywhere, Category = "Desert|Generation")
-    int32 Seed = 12345;
-
-    UPROPERTY(EditAnywhere, Category = "Desert|Generation",
-        meta = (ClampMin = "2", ClampMax = "500"))
+    UPROPERTY(EditAnywhere, Category = "Map|Generation", meta = (ClampMin = "2", ClampMax = "150"))
     int32 GridSize = 100;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Generation",
-        meta = (ClampMin = "10.0"))
+    UPROPERTY(EditAnywhere, Category = "Map|Generation", meta = (ClampMin = "10.0"))
     float CellSize = 200.0f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Terrain",
-        meta = (ClampMin = "0.0"))
+    UPROPERTY(EditAnywhere, Category = "Map|Generation")
+    int32 MapSeed = 1337;
+
+    // Terrain DÃ©sert
+    UPROPERTY(EditAnywhere, Category = "Map|Terrain", meta = (ClampMin = "0.0"))
     float HeightScale = 300.0f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Terrain",
-        meta = (ClampMin = "0.00001"))
+    UPROPERTY(EditAnywhere, Category = "Map|Terrain", meta = (ClampMin = "0.00001"))
     float NoiseScale = 0.015f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Terrain",
-        meta = (ClampMin = "0.00001"))
+    UPROPERTY(EditAnywhere, Category = "Map|Terrain", meta = (ClampMin = "0.00001"))
     float DetailScale = 0.05f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Terrain",
-        meta = (ClampMin = "0.0"))
+    UPROPERTY(EditAnywhere, Category = "Map|Terrain", meta = (ClampMin = "0.0"))
     float DetailStrength = 0.2f;
 
-    // --------------------------------------------------
-    // Répartition des biomes
-    // --------------------------------------------------
+    UPROPERTY(EditAnywhere, Category = "Map|Terrain|Dunes", meta = (ClampMin = "0.0"))
+    float DuneHeight = 90.0f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Biomes",
-        meta = (ClampMin = "2", ClampMax = "10"))
-    int32 BiomeRegionCount = 4;
+    UPROPERTY(EditAnywhere, Category = "Map|Terrain|Dunes", meta = (ClampMin = "0.001"))
+    float DuneFrequency = 0.05f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Biomes",
-        meta = (ClampMin = "0.0", ClampMax = "0.5"))
-    float BiomeVariation = 0.18f;
+    UPROPERTY(EditAnywhere, Category = "Map|Terrain|Dunes", meta = (ClampMin = "0.0", ClampMax = "360.0"))
+    float DuneWindAngle = 35.0f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Biomes",
-        meta = (ClampMin = "0.0", ClampMax = "1.0"))
-    float OasisDensity = 0.35f;
+    UPROPERTY(EditAnywhere, Category = "Map|Terrain|Dunes", meta = (ClampMin = "0.05", ClampMax = "1.0"))
+    float DuneStretch = 0.35f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Biomes",
-        meta = (ClampMin = "0.0", ClampMax = "1.0"))
-    float ForestDensity = 0.65f;
+    // Terrain Grand Canyon
+    UPROPERTY(EditAnywhere, Category = "Map|Terrain|Canyon", meta = (ClampMin = "0.1"))
+    float RockyHeightMultiplier = 1.8f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Biomes",
-        meta = (ClampMin = "0.0", ClampMax = "1.0"))
-    float RockDensity = 0.45f;
+    UPROPERTY(EditAnywhere, Category = "Map|Terrain|Canyon", meta = (ClampMin = "0.0"))
+    float CanyonDepth = 1200.0f;
 
-    // --------------------------------------------------
-    // Ville
-    // --------------------------------------------------
+    UPROPERTY(EditAnywhere, Category = "Map|Terrain|Canyon", meta = (ClampMin = "0.0"))
+    float TerraceStep = 140.0f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|City")
-    bool bGenerateCity = true;
+    UPROPERTY(EditAnywhere, Category = "Map|Terrain", meta = (ClampMin = "10.0"))
+    float TerrainUVWorldSize = 1000.0f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|City",
-        meta = (ClampMin = "0.03", ClampMax = "0.30"))
-    float CitySizeRatio = 0.12f;
+    // Proportions : 3/4 DÃ©sert, 1/4 Canyon
+    UPROPERTY(EditAnywhere, Category = "Map|Biomes", meta = (ClampMin = "0.5", ClampMax = "0.9"))
+    float RockTransitionStart = 0.75f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|City",
-        meta = (ClampMin = "300.0"))
-    float StreetSpacing = 1000.0f;
+    UPROPERTY(EditAnywhere, Category = "Map|Biomes", meta = (ClampMin = "0.02", ClampMax = "0.2"))
+    float RockTransitionWidth = 0.08f;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|City",
-        meta = (ClampMin = "100.0"))
-    float StreetWidth = 220.0f;
+    // Oasis Profondes et Large (Largement augmentÃ©es)
+    UPROPERTY(EditAnywhere, Category = "Map|Oasis", meta = (ClampMin = "1", ClampMax = "20"))
+    int32 OasisCount = 5;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|City",
-        meta = (ClampMin = "100.0"))
-    float MinBuildingHeight = 250.0f;
+    UPROPERTY(EditAnywhere, Category = "Map|Oasis", meta = (ClampMin = "500.0"))
+    float OasisRadius = 2500.0f; // Plus large
 
-    UPROPERTY(EditAnywhere, Category = "Desert|City",
-        meta = (ClampMin = "100.0"))
-    float MaxBuildingHeight = 800.0f;
+    UPROPERTY(EditAnywhere, Category = "Map|Oasis", meta = (ClampMin = "10.0", ClampMax = "500.0"))
+    float OasisDepth = 200.0f; // Beaucoup plus profond
 
-    // --------------------------------------------------
-    // Végétation et rochers
-    // --------------------------------------------------
+    UPROPERTY(EditAnywhere, Category = "Map|Oasis", meta = (ClampMin = "0.5", ClampMax = "3.0"))
+    float WaterRadiusRatio = 2.2f; // L'eau s'Ã©tale sur une trÃ¨s large portion de l'oasis
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Assets")
-    TObjectPtr<UStaticMesh> TreeMesh;
-
-    UPROPERTY(EditAnywhere, Category = "Desert|Assets")
-    TObjectPtr<UStaticMesh> RockMesh;
-
-    UPROPERTY(EditAnywhere, Category = "Desert|Vegetation",
-        meta = (ClampMin = "1", ClampMax = "20"))
-    int32 InstanceSampleStep = 4;
-
-    // --------------------------------------------------
-    // Matériaux
-    // --------------------------------------------------
-
-    UPROPERTY(EditAnywhere, Category = "Desert|Appearance")
+    // MatÃ©riaux
+    UPROPERTY(EditAnywhere, Category = "Map|Appearance")
     TObjectPtr<UMaterialInterface> DesertMaterial;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Appearance")
+    UPROPERTY(EditAnywhere, Category = "Map|Appearance")
     TObjectPtr<UMaterialInterface> WaterMaterial;
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Appearance")
-    TObjectPtr<UMaterialInterface> RoadMaterial;
+private:
+    void ClearGenerated();
+    void ApplyMaterials();
+    void BuildTerrainMesh();
+    void BuildWater();
 
-    UPROPERTY(EditAnywhere, Category = "Desert|Appearance")
-    TObjectPtr<UMaterialInterface> BuildingMaterial;
+    TArray<FDesertOasis> GenerateGlobalOases(float GlobalMapExtent) const;
+    float OasisNormalizedDistance(float X, float Y, const TArray<FDesertOasis>& OasesList) const;
+
+    void ComputeBiomeWeights(float X, float Y, float GlobalMapExtent, float* OutW) const;
+    float ComputeHeight(float X, float Y, float GlobalMapExtent, const float* W, float OasisDist) const;
+
+    float SampleHeightAtWorld(float WorldX, float WorldY, float GlobalMapExtent) const;
+    FVector SampleNormalAtWorld(float WorldX, float WorldY, float GlobalMapExtent) const;
+
+    TArray<FLinearColor> TerrainTint;
+    TArray<uint8> BlockedGrid;
+    TArray<EDesertBiome> BiomeGrid;
+    TArray<float> HeightGrid;
+
+    int32 GridVerts = 0;
 };

@@ -1,7 +1,92 @@
-
 #include "MapGenerator.h"
 
-#include "KismetProceduralMeshLibrary.h"
+#include "Engine/StaticMesh.h"
+
+namespace
+{
+    constexpr int32 WaterSegments = 48;
+    constexpr float MaxOasisInfluence = 4.0f; // Ã‰tendue de l'influence pour accepter de plus grands rayons
+
+    inline float Smooth01(float T)
+    {
+        T = FMath::Clamp(T, 0.0f, 1.0f);
+        return T * T * (3.0f - 2.0f * T);
+    }
+
+    inline FLinearColor LerpColor(const FLinearColor& A, const FLinearColor& B, float T)
+    {
+        return A + (B - A) * T;
+    }
+
+    inline FColor ToVertexColor(const FLinearColor& C)
+    {
+        return FLinearColor(C.R, C.G, C.B, 1.0f).ToFColor(false);
+    }
+
+    float OasisShapeFactor(const FDesertOasis& O, float Angle)
+    {
+        const float Nx = FMath::Cos(Angle) * 1.4f + O.ShapeX;
+        const float Ny = FMath::Sin(Angle) * 1.4f + O.ShapeY;
+        return 1.0f + 0.28f * FMath::PerlinNoise2D(FVector2D(Nx, Ny));
+    }
+
+    struct FMeshData
+    {
+        TArray<FVector> Vertices;
+        TArray<int32> Triangles;
+        TArray<FVector> Normals;
+        TArray<FVector2D> UVs;
+        TArray<FColor> Colors;
+        TArray<FProcMeshTangent> Tangents;
+
+        bool IsEmpty() const
+        {
+            return Vertices.IsEmpty() || Triangles.IsEmpty();
+        }
+
+        int32 AddVertex(const FVector& P, const FVector& N, const FVector2D& UV,
+            const FColor& Color, const FVector& TangentX)
+        {
+            Vertices.Add(P);
+            Normals.Add(N);
+            UVs.Add(UV);
+            Colors.Add(Color);
+            Tangents.Add(FProcMeshTangent(TangentX, false));
+            return Vertices.Num() - 1;
+        }
+
+        void AddTriangle(int32 A, int32 B, int32 C, const FVector& FaceNormal)
+        {
+            const FVector Geo = -FVector::CrossProduct(
+                Vertices[B] - Vertices[A], Vertices[C] - Vertices[A]);
+
+            if (FVector::DotProduct(Geo, FaceNormal) < 0.0)
+            {
+                Swap(B, C);
+            }
+
+            Triangles.Add(A);
+            Triangles.Add(B);
+            Triangles.Add(C);
+        }
+    };
+
+    void CommitSection(UProceduralMeshComponent* Component, int32 SectionIndex,
+        const FMeshData& M, bool bCollision)
+    {
+        if (!Component || M.IsEmpty()) return;
+
+        Component->CreateMeshSection(
+            SectionIndex,
+            M.Vertices,
+            M.Triangles,
+            M.Normals,
+            M.UVs,
+            M.Colors,
+            M.Tangents,
+            bCollision);
+    }
+}
 
 AMapGenerator::AMapGenerator()
 {
@@ -9,768 +94,375 @@ AMapGenerator::AMapGenerator()
 
     DesertMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("DesertMesh"));
     SetRootComponent(DesertMesh);
+    DesertMesh->bUseAsyncCooking = true;
 
     WaterMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("WaterMesh"));
     WaterMesh->SetupAttachment(DesertMesh);
     WaterMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     WaterMesh->SetCastShadow(false);
-
-    RoadMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("RoadMesh"));
-    RoadMesh->SetupAttachment(DesertMesh);
-
-    CityMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("CityMesh"));
-    CityMesh->SetupAttachment(DesertMesh);
-
-    TreeInstances = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("TreeInstances"));
-    TreeInstances->SetupAttachment(DesertMesh);
-
-    RockInstances = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("RockInstances"));
-    RockInstances->SetupAttachment(DesertMesh);
-
-    DesertMesh->bUseAsyncCooking = true;
 }
 
 void AMapGenerator::OnConstruction(const FTransform& Transform)
 {
     Super::OnConstruction(Transform);
-    GenerateDesert();
+
+    if (bAutoGenerate)
+    {
+        GenerateMap();
+    }
 }
 
-void AMapGenerator::GenerateDesert()
+void AMapGenerator::GenerateMap()
 {
-    if (!DesertMesh || !WaterMesh || !RoadMesh || !CityMesh ||
-        !TreeInstances || !RockInstances)
-    {
-        return;
-    }
+    if (!DesertMesh || !WaterMesh) return;
 
-    // Nettoyage des meshes et des instances précédentes.
+    ClearGenerated();
+    ApplyMaterials();
+
+    GridVerts = GridSize + 1;
+    BuildTerrainMesh();
+    BuildWater();
+}
+
+void AMapGenerator::ClearGenerated()
+{
     DesertMesh->ClearAllMeshSections();
     WaterMesh->ClearAllMeshSections();
-    RoadMesh->ClearAllMeshSections();
-    CityMesh->ClearAllMeshSections();
 
-    TreeInstances->ClearInstances();
-    RockInstances->ClearInstances();
-
-    TreeInstances->SetStaticMesh(TreeMesh);
-    RockInstances->SetStaticMesh(RockMesh);
-
-    if (DesertMaterial)
-        DesertMesh->SetMaterial(0, DesertMaterial);
-
-    if (WaterMaterial)
-        WaterMesh->SetMaterial(0, WaterMaterial);
-
-    if (RoadMaterial)
-        RoadMesh->SetMaterial(0, RoadMaterial);
-
-    if (BuildingMaterial)
-        CityMesh->SetMaterial(0, BuildingMaterial);
+    HeightGrid.Reset();
+    BiomeGrid.Reset();
+    BlockedGrid.Reset();
+    TerrainTint.Reset();
 
     WaterMesh->SetVisibility(true);
+}
 
-    const int32 Size = FMath::Clamp(GridSize, 2, 500);
-    const float Extent = Size * CellSize;
-    const float CityHalfSize = Extent * CitySizeRatio;
+void AMapGenerator::ApplyMaterials()
+{
+    if (DesertMaterial) DesertMesh->SetMaterial(0, DesertMaterial);
+    if (WaterMaterial) WaterMesh->SetMaterial(0, WaterMaterial);
+}
 
-    const FVector2D CityCenter(Extent * 0.5f, Extent * 0.5f);
+TArray<FDesertOasis> AMapGenerator::GenerateGlobalOases(float GlobalMapExtent) const
+{
+    TArray<FDesertOasis> Result;
+    FRandomStream Stream(MapSeed);
 
-    // ---------------------------------------------------------
-    // 1. GÉNÉRATION DES RÉGIONS ET DES BIOMES
-    // ---------------------------------------------------------
-
-    struct FBiomeRegion
+    for (int32 i = 0; i < OasisCount; ++i)
     {
-        FVector2D Center;
-        EDesertBiome Type;
-    };
+        FDesertOasis O;
+        O.X = Stream.FRandRange(GlobalMapExtent * 0.15f, GlobalMapExtent * (RockTransitionStart - 0.1f));
+        O.Y = Stream.FRandRange(GlobalMapExtent * 0.15f, GlobalMapExtent * 0.85f);
+        O.Radius = OasisRadius;
+        O.ShapeX = Stream.FRandRange(-500.0f, 500.0f);
+        O.ShapeY = Stream.FRandRange(-500.0f, 500.0f);
+        Result.Add(O);
+    }
 
-    TArray<FBiomeRegion> Regions;
+    return Result;
+}
 
-    FRandomStream RegionRandom(Seed);
+float AMapGenerator::OasisNormalizedDistance(float X, float Y, const TArray<FDesertOasis>& OasesList) const
+{
+    float Best = TNumericLimits<float>::Max();
 
-    const int32 RegionCount = FMath::Clamp(BiomeRegionCount, 2, 10);
-    const float RegionSpacing = Extent / RegionCount;
-    const float Jitter = RegionSpacing * 0.25f;
-
-    const float RegionNoiseX = RegionRandom.FRandRange(-1000.0f, 1000.0f);
-    const float RegionNoiseY = RegionRandom.FRandRange(-1000.0f, 1000.0f);
-
-    for (int32 Y = 0; Y < RegionCount; ++Y)
+    for (const FDesertOasis& O : OasesList)
     {
-        for (int32 X = 0; X < RegionCount; ++X)
+        const float DX = X - O.X;
+        const float DY = Y - O.Y;
+        const float Dist2 = DX * DX + DY * DY;
+
+        const float Reject = O.Radius * 6.0f;
+        if (Dist2 > Reject * Reject) continue;
+
+        const float Angle = FMath::Atan2(DY, DX);
+        const float Dist = FMath::Sqrt(Dist2);
+
+        Best = FMath::Min(Best, Dist / (O.Radius * OasisShapeFactor(O, Angle)));
+    }
+
+    return Best;
+}
+
+void AMapGenerator::ComputeBiomeWeights(float X, float Y, float GlobalMapExtent, float* OutW) const
+{
+    OutW[0] = 0.0f; // Desert
+    OutW[1] = 0.0f; // Oasis
+    OutW[2] = 0.0f; // Rocky
+
+    const float NormX = FMath::Clamp(X / GlobalMapExtent, 0.0f, 1.0f);
+    
+    const float RockyFactor = Smooth01((NormX - RockTransitionStart) / FMath::Max(RockTransitionWidth, 0.01f));
+    const float DesertFactor = 1.0f - RockyFactor;
+
+    OutW[0] = DesertFactor;
+    OutW[2] = RockyFactor;
+}
+
+float AMapGenerator::ComputeHeight(float X, float Y, float GlobalMapExtent, const float* W, float OasisDist) const
+{
+    const float WDesert = W[0];
+    const float WRocky = W[2];
+
+    const float Cx = X / CellSize;
+    const float Cy = Y / CellSize;
+
+    const float LargeNoise = FMath::PerlinNoise2D(FVector2D(Cx * NoiseScale + 12.3f, Cy * NoiseScale + 45.6f));
+    const float DetailNoise = FMath::PerlinNoise2D(FVector2D(Cx * DetailScale + 78.9f, Cy * DetailScale + 32.1f));
+
+    float Height = (LargeNoise + DetailNoise * DetailStrength) * HeightScale;
+    Height *= WDesert + WRocky * RockyHeightMultiplier;
+
+    if (DuneHeight > 0.0f && WDesert > 0.01f)
+    {
+        const float Angle = FMath::DegreesToRadians(DuneWindAngle);
+        const float CosA = FMath::Cos(Angle);
+        const float SinA = FMath::Sin(Angle);
+
+        const float Along = Cx * CosA + Cy * SinA;
+        float Across = -Cx * SinA + Cy * CosA;
+
+        Across += 3.0f * FMath::PerlinNoise2D(FVector2D(Along * 0.04f + 11.3f, Across * 0.04f + 5.7f));
+
+        const float Ridge = 1.0f - FMath::Abs(FMath::PerlinNoise2D(FVector2D(Across * DuneFrequency + 100.0f, Along * DuneFrequency * DuneStretch + 200.0f)));
+        Height += (Ridge * Ridge - 0.35f) * DuneHeight * WDesert;
+    }
+
+    if (WRocky > 0.01f)
+    {
+        const float GorgeNoise1 = FMath::Abs(FMath::PerlinNoise2D(FVector2D(Cx * 0.004f + 33.0f, Cy * 0.004f + 77.0f)));
+        const float GorgeNoise2 = FMath::Abs(FMath::PerlinNoise2D(FVector2D(Cx * 0.012f + 15.0f, Cy * 0.012f + 44.0f)));
+        
+        float CanyonShape = FMath::Pow(1.0f - GorgeNoise1, 3.5f) * 1.3f + GorgeNoise2 * 0.25f;
+        float CanyonCut = CanyonShape * CanyonDepth;
+        
+        Height -= CanyonCut * WRocky;
+
+        if (TerraceStep > 1.0f)
         {
-            const float CenterX = (X + 0.5f) * RegionSpacing
-                + RegionRandom.FRandRange(-Jitter, Jitter);
-
-            const float CenterY = (Y + 0.5f) * RegionSpacing
-                + RegionRandom.FRandRange(-Jitter, Jitter);
-
-            EDesertBiome Type = EDesertBiome::Desert;
-
-            const int32 Index = Y * RegionCount + X;
-
-            if (Index == 0)
-            {
-                Type = EDesertBiome::Oasis;
-            }
-            else if (Index == 1)
-            {
-                Type = EDesertBiome::Rocky;
-            }
-            else if (Index == 2)
-            {
-                Type = EDesertBiome::Forest;
-            }
-            else
-            {
-                const float Choice = RegionRandom.FRand();
-
-                if (Choice < OasisDensity)
-                {
-                    Type = EDesertBiome::Oasis;
-                }
-                else if (Choice < OasisDensity + RockDensity)
-                {
-                    Type = EDesertBiome::Rocky;
-                }
-                else if (Choice < OasisDensity + RockDensity + ForestDensity)
-                {
-                    Type = EDesertBiome::Forest;
-                }
-            }
-
-            FBiomeRegion Region;
-            Region.Center = FVector2D(CenterX, CenterY);
-            Region.Type = Type;
-
-            Regions.Add(Region);
+            const float S = Height / TerraceStep;
+            const float F = FMath::FloorToFloat(S);
+            const float Terraced = (F + Smooth01((S - F - 0.2f) / 0.12f)) * TerraceStep;
+            Height = FMath::Lerp(Height, Terraced, WRocky * 0.95f);
         }
     }
 
-    // ---------------------------------------------------------
-    // 2. DÉTERMINATION DU BIOME À UNE POSITION
-    // ---------------------------------------------------------
-
-    auto FindRegionIndex = [&](float X, float Y) -> int32
-        {
-            int32 BestIndex = 0;
-            float BestScore = TNumericLimits<float>::Max();
-
-            for (int32 I = 0; I < Regions.Num(); ++I)
-            {
-                const FVector2D Delta =
-                    FVector2D(X, Y) - Regions[I].Center;
-
-                const float Distance = Delta.Size();
-
-                const float BoundaryNoise = FMath::PerlinNoise2D(
-                    FVector2D(
-                        (X + Regions[I].Center.X * 0.37f)
-                        * 0.001f + RegionNoiseX,
-                        (Y + Regions[I].Center.Y * 0.37f)
-                        * 0.001f + RegionNoiseY));
-
-                const float Score =
-                    Distance + BoundaryNoise * RegionSpacing * BiomeVariation;
-
-                if (Score < BestScore)
-                {
-                    BestScore = Score;
-                    BestIndex = I;
-                }
-            }
-
-            return BestIndex;
-        };
-
-    auto GetBiomeAt = [&](float X, float Y) -> EDesertBiome
-        {
-            if (bGenerateCity &&
-                (FVector2D(X, Y) - CityCenter).Size() < CityHalfSize)
-            {
-                return EDesertBiome::City;
-            }
-
-            return Regions[FindRegionIndex(X, Y)].Type;
-        };
-
-    // ---------------------------------------------------------
-    // 3. HAUTEUR DU TERRAIN
-    // ---------------------------------------------------------
-
-    FRandomStream TerrainRandom(Seed);
-
-    const float TerrainOffsetX =
-        TerrainRandom.FRandRange(-100000.0f, 100000.0f);
-
-    const float TerrainOffsetY =
-        TerrainRandom.FRandRange(-100000.0f, 100000.0f);
-
-    auto GetHeightAt = [&](float X, float Y) -> float
-        {
-            const float LargeNoise = FMath::PerlinNoise2D(
-                FVector2D(
-                    X / CellSize * NoiseScale + TerrainOffsetX,
-                    Y / CellSize * NoiseScale + TerrainOffsetY));
-
-            const float DetailNoise = FMath::PerlinNoise2D(
-                FVector2D(
-                    X / CellSize * DetailScale + TerrainOffsetX + 543.0f,
-                    Y / CellSize * DetailScale + TerrainOffsetY + 987.0f));
-
-            float Height =
-                (LargeNoise + DetailNoise * DetailStrength) * HeightScale;
-
-            // Aplanissement progressif de la zone urbaine.
-            if (bGenerateCity)
-            {
-                const float Distance =
-                    (FVector2D(X, Y) - CityCenter).Size();
-
-                const float Start = CityHalfSize * 0.75f;
-                const float End = CityHalfSize * 1.25f;
-
-                float T = FMath::Clamp(
-                    (Distance - Start) /
-                    FMath::Max(End - Start, 1.0f),
-                    0.0f, 1.0f);
-
-                T = T * T * (3.0f - 2.0f * T);
-
-                const float CityBlend = 1.0f - T;
-
-                Height = FMath::Lerp(Height, 0.0f, CityBlend);
-            }
-
-            // Création d'une cuvette pour les oasis.
-            const int32 RegionIndex = FindRegionIndex(X, Y);
-            const FBiomeRegion& Region = Regions[RegionIndex];
-
-            if (Region.Type == EDesertBiome::Oasis)
-            {
-                const float Distance =
-                    (FVector2D(X, Y) - Region.Center).Size();
-
-                const float OasisRadius = RegionSpacing * 0.14f;
-                const float Start = OasisRadius * 0.7f;
-                const float End = OasisRadius * 1.8f;
-
-                float T = FMath::Clamp(
-                    (Distance - Start) /
-                    FMath::Max(End - Start, 1.0f),
-                    0.0f, 1.0f);
-
-                T = T * T * (3.0f - 2.0f * T);
-
-                const float OasisBlend = 1.0f - T;
-
-                Height = FMath::Lerp(Height, -20.0f, OasisBlend);
-            }
-
-            return Height;
-        };
-
-    // ---------------------------------------------------------
-    // 4. OUTILS POUR CONSTRUIRE LES MESHES
-    // ---------------------------------------------------------
-
-    auto AppendQuad = [](
-        TArray<FVector>& V,
-        TArray<int32>& T,
-        TArray<FVector2D>& UV,
-        const FVector& P0,
-        const FVector& P1,
-        const FVector& P2,
-        const FVector& P3)
-        {
-            const int32 Start = V.Num();
-
-            V.Add(P0);
-            V.Add(P1);
-            V.Add(P2);
-            V.Add(P3);
-
-            UV.Add(FVector2D(0.0f, 0.0f));
-            UV.Add(FVector2D(1.0f, 0.0f));
-            UV.Add(FVector2D(1.0f, 1.0f));
-            UV.Add(FVector2D(0.0f, 1.0f));
-
-            T.Add(Start);
-            T.Add(Start + 1);
-            T.Add(Start + 2);
-
-            T.Add(Start);
-            T.Add(Start + 2);
-            T.Add(Start + 3);
-        };
-
-    auto AppendBox = [&](
-        TArray<FVector>& V,
-        TArray<int32>& T,
-        TArray<FVector2D>& UV,
-        float X,
-        float Y,
-        float HalfX,
-        float HalfY,
-        float BaseZ,
-        float Height)
-        {
-            const float X0 = X - HalfX;
-            const float X1 = X + HalfX;
-            const float Y0 = Y - HalfY;
-            const float Y1 = Y + HalfY;
-            const float Z0 = BaseZ;
-            const float Z1 = BaseZ + Height;
-
-            // Dessus.
-            AppendQuad(V, T, UV,
-                FVector(X0, Y0, Z1),
-                FVector(X1, Y0, Z1),
-                FVector(X1, Y1, Z1),
-                FVector(X0, Y1, Z1));
-
-            // Dessous.
-            AppendQuad(V, T, UV,
-                FVector(X0, Y1, Z0),
-                FVector(X1, Y1, Z0),
-                FVector(X1, Y0, Z0),
-                FVector(X0, Y0, Z0));
-
-            // Face avant.
-            AppendQuad(V, T, UV,
-                FVector(X0, Y0, Z0),
-                FVector(X1, Y0, Z0),
-                FVector(X1, Y0, Z1),
-                FVector(X0, Y0, Z1));
-
-            // Face arrière.
-            AppendQuad(V, T, UV,
-                FVector(X1, Y1, Z0),
-                FVector(X0, Y1, Z0),
-                FVector(X0, Y1, Z1),
-                FVector(X1, Y1, Z1));
-
-            // Côté gauche.
-            AppendQuad(V, T, UV,
-                FVector(X0, Y1, Z0),
-                FVector(X0, Y0, Z0),
-                FVector(X0, Y0, Z1),
-                FVector(X0, Y1, Z1));
-
-            // Côté droit.
-            AppendQuad(V, T, UV,
-                FVector(X1, Y0, Z0),
-                FVector(X1, Y1, Z0),
-                FVector(X1, Y1, Z1),
-                FVector(X1, Y0, Z1));
-        };
-
-    auto BuildMeshSection = [](
-        UProceduralMeshComponent* Component,
-        const TArray<FVector>& V,
-        const TArray<int32>& T,
-        const TArray<FVector2D>& UV,
-        bool bCollision)
-        {
-            if (!Component || V.IsEmpty() || T.IsEmpty())
-            {
-                return;
-            }
-
-            TArray<FVector> Normals;
-            TArray<FProcMeshTangent> Tangents;
-
-            UKismetProceduralMeshLibrary::CalculateTangentsForMesh(
-                V, T, UV, Normals, Tangents);
-
-            Component->CreateMeshSection(
-                0,
-                V,
-                T,
-                Normals,
-                UV,
-                TArray<FColor>(),
-                Tangents,
-                bCollision);
-        };
-
-    // ---------------------------------------------------------
-    // 5. GÉNÉRATION DU TERRAIN
-    // ---------------------------------------------------------
-
-    TArray<FVector> Vertices;
-    TArray<int32> Triangles;
-    TArray<FVector2D> UVs;
-
-    const int32 VertexCount = (Size + 1) * (Size + 1);
-
-    Vertices.Reserve(VertexCount);
-    UVs.Reserve(VertexCount);
-    Triangles.Reserve(Size * Size * 6);
-
-    for (int32 Y = 0; Y <= Size; ++Y)
+    // --- CUVETTE D'OASIS Ã‰LARGIE ET PROFONDE ---
+    if (OasisDist < MaxOasisInfluence)
     {
-        for (int32 X = 0; X <= Size; ++X)
+        // Pente d'approche plus douce et large
+        const float Plain = 1.0f - Smooth01((OasisDist - 2.8f) / 1.5f);
+        Height = FMath::Lerp(Height, 0.0f, Plain);
+
+        // Cuvette beaucoup plus large et profonde
+        const float Bowl = 1.0f - Smooth01((OasisDist - 0.5f) / 1.8f);
+        Height = FMath::Lerp(Height, -OasisDepth, Bowl);
+    }
+
+    return Height;
+}
+
+float AMapGenerator::SampleHeightAtWorld(float WorldX, float WorldY, float GlobalMapExtent) const
+{
+    float W[4];
+    ComputeBiomeWeights(WorldX, WorldY, GlobalMapExtent, W);
+    TArray<FDesertOasis> OasesList = GenerateGlobalOases(GlobalMapExtent);
+    float OasisDist = OasisNormalizedDistance(WorldX, WorldY, OasesList);
+    return ComputeHeight(WorldX, WorldY, GlobalMapExtent, W, OasisDist);
+}
+
+FVector AMapGenerator::SampleNormalAtWorld(float WorldX, float WorldY, float GlobalMapExtent) const
+{
+    const float E = CellSize * 0.5f;
+    const float Dx = (SampleHeightAtWorld(WorldX + E, WorldY, GlobalMapExtent) - SampleHeightAtWorld(WorldX - E, WorldY, GlobalMapExtent)) / (2.0f * E);
+    const float Dy = (SampleHeightAtWorld(WorldX, WorldY + E, GlobalMapExtent) - SampleHeightAtWorld(WorldX, WorldY - E, GlobalMapExtent)) / (2.0f * E);
+    return FVector(-Dx, -Dy, 1.0f).GetSafeNormal();
+}
+
+float AMapGenerator::GetTerrainHeightAtWorld(float WorldX, float WorldY) const
+{
+    const float GlobalMapExtent = GridSize * CellSize * 2.0f;
+    const FTransform& T = GetActorTransform();
+    const FVector Local = T.InverseTransformPosition(FVector(WorldX, WorldY, GetActorLocation().Z));
+    
+    float OffX = 0.0f, OffY = 0.0f;
+    if (Quadrant == EMapQuadrant::TopRight || Quadrant == EMapQuadrant::BottomRight) OffX = GridSize * CellSize;
+    if (Quadrant == EMapQuadrant::BottomLeft || Quadrant == EMapQuadrant::BottomRight) OffY = GridSize * CellSize;
+
+    const float LocalH = SampleHeightAtWorld(OffX + Local.X, OffY + Local.Y, GlobalMapExtent);
+    return T.TransformPosition(FVector(Local.X, Local.Y, LocalH)).Z;
+}
+
+void AMapGenerator::BuildTerrainMesh()
+{
+    FMeshData Mesh;
+    const int32 Count = GridVerts * GridVerts;
+    Mesh.Vertices.Reserve(Count);
+    Mesh.Normals.Reserve(Count);
+    Mesh.UVs.Reserve(Count);
+    Mesh.Colors.Reserve(Count);
+    Mesh.Tangents.Reserve(Count);
+    Mesh.Triangles.Reserve(GridSize * GridSize * 6);
+
+    const float GlobalMapExtent = GridSize * CellSize * 2.0f;
+    TArray<FDesertOasis> OasesList = GenerateGlobalOases(GlobalMapExtent);
+
+    float QuadrantOffsetX = 0.0f;
+    float QuadrantOffsetY = 0.0f;
+
+    if (Quadrant == EMapQuadrant::TopRight || Quadrant == EMapQuadrant::BottomRight)
+    {
+        QuadrantOffsetX = GridSize * CellSize;
+    }
+    if (Quadrant == EMapQuadrant::BottomLeft || Quadrant == EMapQuadrant::BottomRight)
+    {
+        QuadrantOffsetY = GridSize * CellSize;
+    }
+
+    const FLinearColor SandTint(0.82f, 0.66f, 0.40f);
+    const FLinearColor RockTint(0.52f, 0.32f, 0.22f);
+    const FLinearColor GrassTint(0.36f, 0.48f, 0.20f);
+    const FLinearColor WetTint(0.30f, 0.26f, 0.17f);
+    const FLinearColor SteepRockTint(0.38f, 0.22f, 0.16f);
+
+    HeightGrid.SetNumUninitialized(Count);
+    BiomeGrid.Init(EDesertBiome::Desert, Count);
+    BlockedGrid.Init(0, Count);
+    TerrainTint.SetNumUninitialized(Count);
+
+    for (int32 Y = 0; Y < GridVerts; ++Y)
+    {
+        for (int32 X = 0; X < GridVerts; ++X)
         {
-            const float WorldX = X * CellSize;
-            const float WorldY = Y * CellSize;
+            const int32 Idx = Y * GridVerts + X;
+            const float WX = QuadrantOffsetX + (X * CellSize);
+            const float WY = QuadrantOffsetY + (Y * CellSize);
 
-            Vertices.Add(
-                FVector(WorldX, WorldY, GetHeightAt(WorldX, WorldY)));
+            float W[4];
+            ComputeBiomeWeights(WX, WY, GlobalMapExtent, W);
 
-            UVs.Add(FVector2D(
-                static_cast<float>(X) / Size,
-                static_cast<float>(Y) / Size));
+            const float OasisDist = OasisNormalizedDistance(WX, WY, OasesList);
+            const float H = ComputeHeight(WX, WY, GlobalMapExtent, W, OasisDist);
+            HeightGrid[Idx] = H;
+
+            EDesertBiome Biome = (W[2] > 0.5f) ? EDesertBiome::Rocky : EDesertBiome::Desert;
+            if (OasisDist < MaxOasisInfluence)
+            {
+                Biome = EDesertBiome::Oasis;
+                BlockedGrid[Idx] = 1;
+            }
+            BiomeGrid[Idx] = Biome;
+
+            const FVector Normal = SampleNormalAtWorld(WX, WY, GlobalMapExtent);
+            const FVector TangentX = FVector(1.0f, 0.0f, Normal.Z).GetSafeNormal();
+
+            const float Slope = Smooth01((1.0f - static_cast<float>(Normal.Z) - 0.08f) / 0.25f);
+            FLinearColor Tint = SandTint * W[0] + RockTint * W[2];
+
+            if (OasisDist < MaxOasisInfluence)
+            {
+                const float Grass = 1.0f - Smooth01((OasisDist - 1.5f) / 2.0f);
+                Tint = LerpColor(Tint, GrassTint, Grass * 0.8f);
+
+                const float Wet = 1.0f - Smooth01((OasisDist - 1.0f) / 0.8f);
+                Tint = LerpColor(Tint, WetTint, Wet);
+            }
+
+            Tint = LerpColor(Tint, SteepRockTint, Slope);
+            const float Variation = 1.0f + 0.07f * FMath::PerlinNoise2D(FVector2D(WX * 0.0035f + 10.0f, WY * 0.0035f + 20.0f));
+            Tint = Tint * Variation;
+            Tint.A = 1.0f;
+            TerrainTint[Idx] = Tint;
+
+            Mesh.AddVertex(
+                FVector(X * CellSize, Y * CellSize, H),
+                Normal,
+                FVector2D(WX / TerrainUVWorldSize, WY / TerrainUVWorldSize),
+                ToVertexColor(Tint),
+                TangentX);
         }
     }
 
-    for (int32 Y = 0; Y < Size; ++Y)
+    for (int32 Y = 0; Y < GridSize; ++Y)
     {
-        for (int32 X = 0; X < Size; ++X)
+        for (int32 X = 0; X < GridSize; ++X)
         {
-            const int32 A = Y * (Size + 1) + X;
+            const int32 A = Y * GridVerts + X;
             const int32 B = A + 1;
-            const int32 C = A + Size + 1;
+            const int32 C = A + GridVerts;
             const int32 D = C + 1;
 
-            // Conserve l'ordre de triangles qui fonctionne sur ton terrain.
-            Triangles.Add(A);
-            Triangles.Add(C);
-            Triangles.Add(B);
+            Mesh.Triangles.Add(A);
+            Mesh.Triangles.Add(C);
+            Mesh.Triangles.Add(B);
 
-            Triangles.Add(B);
-            Triangles.Add(C);
-            Triangles.Add(D);
+            Mesh.Triangles.Add(B);
+            Mesh.Triangles.Add(C);
+            Mesh.Triangles.Add(D);
         }
     }
 
-    BuildMeshSection(DesertMesh, Vertices, Triangles, UVs, true);
+    CommitSection(DesertMesh, 0, Mesh, true);
+}
 
-    // ---------------------------------------------------------
-    // 6. EAU DES OASIS
-    // ---------------------------------------------------------
+void AMapGenerator::BuildWater()
+{
+    FMeshData Mesh;
+    const float WaterZ = -OasisDepth * 0.70f; // AjustÃ© pour que l'eau se pose bien au fond de la grande cuvette
+    const FVector Up(0.0f, 0.0f, 1.0f);
+    const FVector TangentX(1.0f, 0.0f, 0.0f);
 
-    TArray<FVector> WaterVertices;
-    TArray<int32> WaterTriangles;
-    TArray<FVector2D> WaterUVs;
+    const float GlobalMapExtent = GridSize * CellSize * 2.0f;
+    TArray<FDesertOasis> OasesList = GenerateGlobalOases(GlobalMapExtent);
 
-    constexpr int32 WaterSegments = 32;
+    float QuadrantOffsetX = (Quadrant == EMapQuadrant::TopRight || Quadrant == EMapQuadrant::BottomRight) ? GridSize * CellSize : 0.0f;
+    float QuadrantOffsetY = (Quadrant == EMapQuadrant::BottomLeft || Quadrant == EMapQuadrant::BottomRight) ? GridSize * CellSize : 0.0f;
 
-    for (const FBiomeRegion& Region : Regions)
+    for (const FDesertOasis& O : OasesList)
     {
-        if (Region.Type != EDesertBiome::Oasis)
+        const float LocalOX = O.X - QuadrantOffsetX;
+        const float LocalOY = O.Y - QuadrantOffsetY;
+        const float MaxRadiusCheck = O.Radius * WaterRadiusRatio * 1.5f;
+
+        if (LocalOX < -MaxRadiusCheck || LocalOX >(GridSize * CellSize + MaxRadiusCheck) ||
+            LocalOY < -MaxRadiusCheck || LocalOY >(GridSize * CellSize + MaxRadiusCheck))
         {
             continue;
         }
 
-        if (bGenerateCity &&
-            (Region.Center - CityCenter).Size() < CityHalfSize * 1.5f)
-        {
-            continue;
-        }
+        const int32 Center = Mesh.AddVertex(
+            FVector(LocalOX, LocalOY, WaterZ), Up, FVector2D(0.5f, 0.5f),
+            FColor(255, 255, 255, 255), TangentX);
 
-        // Le rayon reste à l'intérieur de la partie plate de l'oasis.
-        const float Radius = RegionSpacing * 0.08f;
-        const float WaterZ = -15.0f;
-
-        const int32 CenterIndex = WaterVertices.Num();
-
-        WaterVertices.Add(
-            FVector(Region.Center.X, Region.Center.Y, WaterZ));
-
-        WaterUVs.Add(FVector2D(0.5f, 0.5f));
+        int32 FirstVert = -1;
+        int32 PrevVert = -1;
 
         for (int32 I = 0; I < WaterSegments; ++I)
         {
-            const float Angle =
-                2.0f * PI * static_cast<float>(I) / WaterSegments;
+            const float Angle = 2.0f * PI * static_cast<float>(I) / WaterSegments;
+            const float CosA = FMath::Cos(Angle);
+            const float SinA = FMath::Sin(Angle);
 
-            const float CosAngle = FMath::Cos(Angle);
-            const float SinAngle = FMath::Sin(Angle);
+            const float Radius = O.Radius * WaterRadiusRatio * OasisShapeFactor(O, Angle);
+            const float VX = LocalOX + CosA * Radius;
+            const float VY = LocalOY + SinA * Radius;
 
-            const float X = Region.Center.X + CosAngle * Radius;
-            const float Y = Region.Center.Y + SinAngle * Radius;
+            const int32 V = Mesh.AddVertex(
+                FVector(VX, VY, WaterZ),
+                Up,
+                FVector2D(0.5f + CosA * 0.5f, 0.5f + SinA * 0.5f),
+                FColor(255, 255, 255, 0),
+                TangentX);
 
-            WaterVertices.Add(FVector(X, Y, WaterZ));
-
-            WaterUVs.Add(FVector2D(
-                0.5f + CosAngle * 0.5f,
-                0.5f + SinAngle * 0.5f));
-        }
-
-        for (int32 I = 0; I < WaterSegments; ++I)
-        {
-            const int32 Center = CenterIndex;
-            const int32 B = CenterIndex + 1 + I;
-            const int32 C =
-                CenterIndex + 1 + ((I + 1) % WaterSegments);
-
-            // Même orientation que celle du terrain corrigé.
-            WaterTriangles.Add(Center);
-            WaterTriangles.Add(C);
-            WaterTriangles.Add(B);
-        }
-    }
-
-    BuildMeshSection(
-        WaterMesh,
-        WaterVertices,
-        WaterTriangles,
-        WaterUVs,
-        false);
-
-    WaterMesh->SetVisibility(true);
-
-    // ---------------------------------------------------------
-    // 7. VILLE : ROUTES ET BÂTIMENTS
-    // ---------------------------------------------------------
-
-    if (bGenerateCity)
-    {
-        TArray<FVector> RoadVertices;
-        TArray<int32> RoadTriangles;
-        TArray<FVector2D> RoadUVs;
-
-        TArray<FVector> BuildingVertices;
-        TArray<int32> BuildingTriangles;
-        TArray<FVector2D> BuildingUVs;
-
-        const float Half = CityHalfSize;
-        const float Spacing = FMath::Max(StreetSpacing, 1.0f);
-        const float RoadHalfWidth = StreetWidth * 0.5f;
-
-        // Routes en grille.
-        for (float Offset = -Half;
-            Offset <= Half + 0.01f;
-            Offset += Spacing)
-        {
-            const float X = CityCenter.X + Offset;
-            const float Y = CityCenter.Y + Offset;
-            const float Z = 5.0f;
-
-            // Route verticale.
-            AppendQuad(
-                RoadVertices, RoadTriangles, RoadUVs,
-                FVector(X - RoadHalfWidth, CityCenter.Y - Half, Z),
-                FVector(X + RoadHalfWidth, CityCenter.Y - Half, Z),
-                FVector(X + RoadHalfWidth, CityCenter.Y + Half, Z),
-                FVector(X - RoadHalfWidth, CityCenter.Y + Half, Z));
-
-            // Route horizontale.
-            AppendQuad(
-                RoadVertices, RoadTriangles, RoadUVs,
-                FVector(CityCenter.X - Half, Y - RoadHalfWidth, Z),
-                FVector(CityCenter.X + Half, Y - RoadHalfWidth, Z),
-                FVector(CityCenter.X + Half, Y + RoadHalfWidth, Z),
-                FVector(CityCenter.X - Half, Y + RoadHalfWidth, Z));
-        }
-
-        // Bâtiments avec des proportions et des hauteurs variables.
-        FRandomStream CityRandom(Seed + 991);
-
-        const float BuildingBaseZ = 15.0f;
-
-        const float BuildingHalfSize = FMath::Max(
-            100.0f,
-            Spacing * 0.30f - StreetWidth * 0.5f);
-
-        for (float X = -Half + Spacing * 0.5f;
-            X < Half;
-            X += Spacing)
-        {
-            for (float Y = -Half + Spacing * 0.5f;
-                Y < Half;
-                Y += Spacing)
+            if (I == 0) FirstVert = V;
+            if (PrevVert != -1)
             {
-                // Espaces libres : cours, petites places ou parcelles vides.
-                if (CityRandom.FRand() < 0.12f)
-                {
-                    continue;
-                }
-
-                const float BuildingOffsetX = CityRandom.FRandRange(
-                    -Spacing * 0.08f, Spacing * 0.08f);
-
-                const float BuildingOffsetY = CityRandom.FRandRange(
-                    -Spacing * 0.08f, Spacing * 0.08f);
-
-                const float BuildingX =
-                    CityCenter.X + X + BuildingOffsetX;
-
-                const float BuildingY =
-                    CityCenter.Y + Y + BuildingOffsetY;
-
-                const float Height = CityRandom.FRandRange(
-                    MinBuildingHeight,
-                    FMath::Max(MinBuildingHeight, MaxBuildingHeight));
-
-                // Largeur et profondeur différentes pour éviter
-                // que tous les bâtiments aient la même silhouette.
-                const float HalfWidthX = CityRandom.FRandRange(
-                    BuildingHalfSize * 0.45f,
-                    BuildingHalfSize);
-
-                const float HalfWidthY = CityRandom.FRandRange(
-                    BuildingHalfSize * 0.45f,
-                    BuildingHalfSize);
-
-                AppendBox(
-                    BuildingVertices,
-                    BuildingTriangles,
-                    BuildingUVs,
-                    BuildingX,
-                    BuildingY,
-                    HalfWidthX,
-                    HalfWidthY,
-                    BuildingBaseZ,
-                    Height);
-
-                // Certains bâtiments possèdent un étage supérieur
-                // en retrait.
-                if (CityRandom.FRand() < 0.35f && Height > 300.0f)
-                {
-                    const float UpperHeight = Height * 0.25f;
-
-                    AppendBox(
-                        BuildingVertices,
-                        BuildingTriangles,
-                        BuildingUVs,
-                        BuildingX,
-                        BuildingY,
-                        HalfWidthX * 0.65f,
-                        HalfWidthY * 0.65f,
-                        BuildingBaseZ + Height,
-                        UpperHeight);
-                }
-
-                // Quelques bâtiments possèdent une petite tour sur le toit.
-                if (CityRandom.FRand() < 0.15f)
-                {
-                    const float TowerWidth =
-                        FMath::Min(HalfWidthX, HalfWidthY) * 0.35f;
-
-                    const float TowerHeight =
-                        CityRandom.FRandRange(80.0f, 180.0f);
-
-                    AppendBox(
-                        BuildingVertices,
-                        BuildingTriangles,
-                        BuildingUVs,
-                        BuildingX,
-                        BuildingY,
-                        TowerWidth,
-                        TowerWidth,
-                        BuildingBaseZ + Height,
-                        TowerHeight);
-                }
+                Mesh.AddTriangle(Center, PrevVert, V, Up);
             }
+            PrevVert = V;
         }
-
-        BuildMeshSection(
-            RoadMesh,
-            RoadVertices,
-            RoadTriangles,
-            RoadUVs,
-            true);
-
-        BuildMeshSection(
-            CityMesh,
-            BuildingVertices,
-            BuildingTriangles,
-            BuildingUVs,
-            true);
+        Mesh.AddTriangle(Center, PrevVert, FirstVert, Up);
     }
 
-    // ---------------------------------------------------------
-    // 8. VÉGÉTATION ET ROCHERS
-    // ---------------------------------------------------------
-
-    if (TreeMesh || RockMesh)
-    {
-        FRandomStream InstanceRandom(Seed + 4242);
-
-        const int32 Step = FMath::Clamp(InstanceSampleStep, 1, 20);
-
-        for (int32 Y = 0; Y < Size; Y += Step)
-        {
-            for (int32 X = 0; X < Size; X += Step)
-            {
-                const float WorldX =
-                    (X + InstanceRandom.FRand()) * CellSize;
-
-                const float WorldY =
-                    (Y + InstanceRandom.FRand()) * CellSize;
-
-                const EDesertBiome Biome = GetBiomeAt(WorldX, WorldY);
-
-                if (Biome == EDesertBiome::City)
-                {
-                    continue;
-                }
-
-                const float Height = GetHeightAt(WorldX, WorldY);
-                const float Roll = InstanceRandom.FRand();
-
-                float TreeChance = 0.0f;
-
-                if (Biome == EDesertBiome::Forest)
-                {
-                    TreeChance = 0.55f;
-                }
-                else if (Biome == EDesertBiome::Oasis)
-                {
-                    TreeChance = 0.20f;
-                }
-                else if (Biome == EDesertBiome::Desert)
-                {
-                    TreeChance = 0.015f;
-                }
-
-                if (TreeMesh && Roll < TreeChance)
-                {
-                    const float Scale =
-                        InstanceRandom.FRandRange(0.8f, 1.4f);
-
-                    const float Yaw =
-                        InstanceRandom.FRandRange(0.0f, 360.0f);
-
-                    TreeInstances->AddInstance(FTransform(
-                        FRotator(0.0f, Yaw, 0.0f),
-                        FVector(WorldX, WorldY, Height),
-                        FVector(Scale)));
-                }
-
-                float RockChance = 0.0f;
-
-                if (Biome == EDesertBiome::Rocky)
-                {
-                    RockChance = 0.30f;
-                }
-                else if (Biome == EDesertBiome::Desert)
-                {
-                    RockChance = 0.08f;
-                }
-                else if (Biome == EDesertBiome::Forest)
-                {
-                    RockChance = 0.03f;
-                }
-
-                if (RockMesh && InstanceRandom.FRand() < RockChance)
-                {
-                    const float Scale =
-                        InstanceRandom.FRandRange(0.6f, 1.8f);
-
-                    const float Yaw =
-                        InstanceRandom.FRandRange(0.0f, 360.0f);
-
-                    RockInstances->AddInstance(FTransform(
-                        FRotator(0.0f, Yaw, 0.0f),
-                        FVector(WorldX, WorldY, Height),
-                        FVector(Scale)));
-                }
-            }
-        }
-    }
+    CommitSection(WaterMesh, 0, Mesh, false);
 }

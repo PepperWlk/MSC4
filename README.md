@@ -104,8 +104,7 @@ Le système d'interaction est entièrement basé sur une **Blueprint Interface**
 
 ### 3.1 Vue d'ensemble et philosophie
 
-L'intégralité du projet (programmation des systèmes, logique de jeu, architecture Blueprint) a été réalisée **manuellement** sous Unreal Engine 5. L'intelligence artificielle n'a en aucun cas été utilisée pour générer du code ou des graphes Blueprints automatiquement à la place du développeur.
-
+L'intégralité du projet (programmation des systèmes, logique de jeu, architecture Blueprint) a été réalisée **manuellement** sous Unreal Engine 5.
 L'IA a été sollicitée de manière ponctuelle comme **outil d'assistance, d'optimisation de flux de travail et de revue technique**, garantissant que chaque ligne de Blueprint, chaque structure et chaque décision d'architecture reste **parfaitement comprise, vérifiée, testée et expliquable**.
 
 ---
@@ -120,9 +119,10 @@ L'IA a été sollicitée de manière ponctuelle comme **outil d'assistance, d'op
 ### 3.3 Domaines d'Application de l'IA
 
 1. **Rappel et vérification de nœuds Blueprints spécifiques** : Identification de fonctions ou de nœuds rarement utilisés ou oubliés.
-2. **Conception et intégration des Widgets (UMG)** : Assistance conceptuelle et méthodologique sur la liaison de données (*Data Binding*) et le flux de travail des interfaces utilisateur.
-3. **Validation des choix d'architecture** : Vérification des conventions de nommage et confirmation des bonnes pratiques (ex: utilisation de Data Assets et d'Interfaces).
-4. **Mise en forme de la documentation** : Rédaction, organisation et formatage propre du cahier des charges et de la documentation technique.
+2. **Vérification du code** : Aide au debugage et à la mise en place de plugins
+3. **Conception et intégration des Widgets (UMG)** : Assistance conceptuelle et méthodologique sur la liaison de données (*Data Binding*) et le flux de travail des interfaces utilisateur.
+4. **Validation des choix d'architecture** : Vérification des conventions de nommage et confirmation des bonnes pratiques (ex: utilisation de Data Assets et d'Interfaces).
+5. **Mise en forme de la documentation** : Rédaction, organisation et formatage propre du cahier des charges et de la documentation technique.
 
 ---
 
@@ -163,3 +163,12 @@ L'IA a été sollicitée de manière ponctuelle comme **outil d'assistance, d'op
 ### 3.8 Conclusion et Responsabilité
 
 Tout le code visuel, la logique Blueprint et les composants intégrés au projet sont entièrement maîtrisés et validés par le développeur. L'IA a servi de partenaire de réflexion et d'assistant documentaire, garantissant la qualité finale sans se substituer à la conception technique humaine.
+
+# 4 Assets utilisés 
+https://www.fab.com/listings/78a6b75f-4687-4ba6-ab4b-d863d0af9491
+
+https://www.fab.com/listings/b68cca49-60ce-4460-a8de-433c683d720a
+
+https://www.fab.com/listings/063155ea-d9d2-4f29-b09f-33270b0bc861
+
+https://www.fab.com/listings/be5ed72e-f542-41f4-b747-bdb343eef609

@@ -2,7 +2,6 @@
 
 UPlayerStatsComponent::UPlayerStatsComponent()
 {
-	// Activer le Tick pour gérer la diminution au fil du temps
 	PrimaryComponentTick.bCanEverTick = true;
 }
 
@@ -10,7 +9,6 @@ void UPlayerStatsComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// Initialiser les stats au maximum au lancement
 	CurrentThirst = MaxThirst;
 	CurrentHunger = MaxHunger;
 	CurrentStamina = MaxStamina;

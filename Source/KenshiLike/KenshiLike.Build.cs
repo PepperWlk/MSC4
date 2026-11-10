@@ -16,6 +16,10 @@ public class KenshiLike : ModuleRules
 			"InputCore",
 			"ProceduralMeshComponent",
 			"NavigationSystem",
+			"UMG",
+			"Slate",
+			"SlateCore",
+			"GameplayTags",
 		});
 
         PrivateDependencyModuleNames.AddRange(new string[] { "AIModule" });

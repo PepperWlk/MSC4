@@ -5,9 +5,11 @@
 #include "CraftingTypes.h"
 #include "CraftingComponent.generated.h"
 
+class UInventoryComponent;
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnCraftCompleted, FName, RecipeRow);
 
-// À mettre sur le Character / PlayerState (même Actor que l'inventaire)
+// À mettre sur le même Actor que l'UInventoryComponent (le Character)
 UCLASS(ClassGroup = (Crafting), meta = (BlueprintSpawnableComponent))
 class UCraftingComponent : public UActorComponent
 {
@@ -28,6 +30,6 @@ public:
 	FOnCraftCompleted OnCraftCompleted;
 
 private:
-	UObject* GetInventory() const; // composant BP implémentant ICraftingInventory
+	UInventoryComponent* GetInventory() const;
 	bool StationMatches(const FCraftingRecipe& Recipe, FGameplayTag Station) const;
 };

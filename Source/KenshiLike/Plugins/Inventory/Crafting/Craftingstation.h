@@ -16,7 +16,7 @@ class ACraftingStation : public AActor
 public:
 	// À appeler depuis TON système d'interaction
 	UFUNCTION(BlueprintCallable)
-	void Interact(APawn* Interactor);
+	void InteractBehavior(APawn* Interactor);
 
 protected:
 	UPROPERTY(EditAnywhere, Category = "Crafting")

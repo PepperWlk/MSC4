@@ -4,10 +4,13 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 
-void ACraftingStation::Interact(APawn* Interactor)
+void ACraftingStation::InteractBehavior(APawn* Interactor)
 {
-	if (!Interactor || !WidgetClass || !RecipeTable) return;
-
+	if (!Interactor || !WidgetClass || !RecipeTable)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ACraftingStation::Interact - WidgetClass or RecipeTable missing"));
+		return;
+	}
 	APlayerController* PC = Cast<APlayerController>(Interactor->GetController());
 	UCraftingComponent* Crafting = Interactor->FindComponentByClass<UCraftingComponent>();
 	if (!PC || !PC->IsLocalController() || !Crafting) return;

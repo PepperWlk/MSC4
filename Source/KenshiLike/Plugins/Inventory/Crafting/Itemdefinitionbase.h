@@ -26,4 +26,9 @@ public:
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Item")
 	FText GetStatsText() const;
 	virtual FText GetStatsText_Implementation() const { return FText::GetEmpty(); }
+
+	// Taille max d'un stack pour cet item. 0 = utiliser MaxStack du composant d'inventaire.
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Item")
+	int32 GetMaxStack() const;
+	virtual int32 GetMaxStack_Implementation() const { return 0; }
 };
